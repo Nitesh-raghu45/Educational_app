@@ -7,8 +7,10 @@ services:
     name: edu-api
     runtime: docker
     plan: free
-    dockerContext: ./backend
-    dockerfilePath: ./backend/Dockerfile
+    # Paths below are relative to rootDir (Render monorepo rule).
+    rootDir: backend
+    dockerContext: .
+    dockerfilePath: ./Dockerfile
     healthCheckPath: /health
     envVars:
       - key: GROQ_API_KEY
