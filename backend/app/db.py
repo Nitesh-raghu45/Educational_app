@@ -1,28 +1,66 @@
+import logging
 import ssl
 from collections.abc import AsyncIterator
 
+from sqlalchemy.engine import URL, make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
 from .config import get_settings
+
+logger = logging.getLogger(__name__)
+
+# MySQL client "ssl-mode" values that mean "use TLS".
+_SSL_ON = {"REQUIRED", "VERIFY_CA", "VERIFY_IDENTITY"}
 
 
 class Base(DeclarativeBase):
     pass
 
 
-def _connect_args() -> dict:
+def normalize_database_url(raw: str) -> tuple[URL, str | None]:
+    """Accept provider URLs as-is (e.g. Aiven's `mysql://…?ssl-mode=REQUIRED`).
+
+    Returns the URL rewritten for the async driver, plus the requested MySQL ssl-mode (if any).
+    Plain `mysql://` would otherwise make SQLAlchemy load the MySQLdb driver, which isn't installed.
+    """
+    url = make_url(raw)
+    if url.get_backend_name() in ("mysql", "mariadb"):
+        query = dict(url.query)
+        ssl_mode = None
+        for key in ("ssl-mode", "ssl_mode", "sslmode"):
+            if key in query:
+                ssl_mode = str(query.pop(key)).upper()
+        if str(query.get("ssl", "")).lower() in ("true", "1", "required"):
+            query.pop("ssl")
+            ssl_mode = ssl_mode or "REQUIRED"
+        query.setdefault("charset", "utf8mb4")
+        url = url.set(drivername="mysql+aiomysql", query=query)
+        return url, ssl_mode
+    return url, None
+
+
+def _connect_args(url: URL, ssl_mode: str | None) -> dict:
     settings = get_settings()
-    if not (settings.database_ssl and settings.database_url.startswith("mysql")):
+    wants_ssl = settings.database_ssl or (ssl_mode in _SSL_ON)
+    if not wants_ssl or url.get_backend_name() != "mysql":
         return {}
     # Env vars often store PEM newlines as a literal backslash-n; restore real newlines.
     ca = settings.database_ssl_ca.replace("\\n", "\n").strip()
-    return {"ssl": ssl.create_default_context(cadata=ca or None)}
+    if ca:
+        return {"ssl": ssl.create_default_context(cadata=ca)}
+    context = ssl.create_default_context()
+    if ssl_mode == "REQUIRED":
+        # MySQL's ssl-mode=REQUIRED encrypts without verifying the server certificate. Providers like
+        # Aiven use their own CA, so set DATABASE_SSL_CA to also verify the certificate.
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        logger.warning("Database TLS is encrypted but unverified; set DATABASE_SSL_CA to verify the server.")
+    return {"ssl": context}
 
 
-engine = create_async_engine(
-    get_settings().database_url, pool_pre_ping=True, pool_recycle=1800, connect_args=_connect_args()
-)
+_url, _ssl_mode = normalize_database_url(get_settings().database_url)
+engine = create_async_engine(_url, pool_pre_ping=True, pool_recycle=1800, connect_args=_connect_args(_url, _ssl_mode))
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
 
