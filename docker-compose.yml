@@ -1,0 +1,73 @@
+services:
+  mariadb:
+    image: mariadb:11.4
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
+    environment:
+      MARIADB_DATABASE: edu
+      MARIADB_USER: edu
+      MARIADB_PASSWORD: ${MARIADB_PASSWORD:-edu}
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:-root}
+    volumes:
+      - mariadb_data:/var/lib/mysql
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: ./backend
+    image: education-backend:latest
+    env_file: .env
+    environment: &backend-env
+      DATABASE_URL: mysql+aiomysql://edu:${MARIADB_PASSWORD:-edu}@mariadb:3306/edu?charset=utf8mb4
+      REDIS_URL: redis://redis:6379/0
+      STORAGE_DIR: /data/uploads
+      INGEST_MODE: queue
+    volumes:
+      - uploads:/data/uploads
+    ports:
+      - "8000:8000"
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    # Reuses the image built for `api` instead of building the same (large) image a second time.
+    image: education-backend:latest
+    pull_policy: never
+    command: ["arq", "app.worker.WorkerSettings"]
+    env_file: .env
+    environment: *backend-env
+    volumes:
+      - uploads:/data/uploads
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  web:
+    build: ./frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
+
+volumes:
+  mariadb_data:
+  uploads:

@@ -1,0 +1,105 @@
+"""Conversation context: recent history, rolling summary, and standalone query rewriting."""
+
+import logging
+import uuid
+from datetime import datetime
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ..config import get_settings
+from ..models import ChatMessage, ChatSection
+from . import providers
+
+logger = logging.getLogger(__name__)
+
+MAX_HISTORY_CHARS = 1500
+
+
+def _clip(text: str, limit: int = MAX_HISTORY_CHARS) -> str:
+    return text if len(text) <= limit else text[:limit] + " …"
+
+
+async def recent_history(
+    session: AsyncSession, section_id: uuid.UUID, before: datetime, limit: int
+) -> list[ChatMessage]:
+    rows = await session.scalars(
+        select(ChatMessage)
+        .where(
+            ChatMessage.section_id == section_id,
+            ChatMessage.created_at < before,
+            ChatMessage.status == "completed",
+        )
+        .order_by(ChatMessage.created_at.desc())
+        .limit(limit)
+    )
+    return list(reversed(list(rows)))
+
+
+def history_as_chat(history: list[ChatMessage]) -> list[dict[str, str]]:
+    return [{"role": m.role, "content": _clip(m.content)} for m in history]
+
+
+def _transcript(history: list[ChatMessage]) -> str:
+    return "\n".join(
+        f"{'Student' if m.role == 'user' else 'Assistant'}: {_clip(m.content, 600)}" for m in history
+    )
+
+
+async def rewrite_query(summary: str | None, history: list[ChatMessage], question: str) -> str:
+    """Turn a follow-up like "explain that again" into a self-contained search query."""
+    if not history and not summary:
+        return question
+    context = ""
+    if summary:
+        context += f"Summary of earlier conversation:\n{summary}\n\n"
+    if history:
+        context += f"Recent conversation:\n{_transcript(history[-6:])}\n\n"
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "Rewrite the student's latest message as a standalone search query for their study "
+                "documents. Resolve pronouns and references using the conversation. If it is already "
+                "standalone, return it unchanged. Output only the query, no quotes or explanation."
+            ),
+        },
+        {"role": "user", "content": f"{context}Latest message: {question}"},
+    ]
+    try:
+        rewritten = await providers.llm().complete(
+            messages, model=get_settings().groq_fast_model, temperature=0.0, max_tokens=1024
+        )
+    except Exception:
+        logger.warning("Query rewrite failed; using the original question", exc_info=True)
+        return question
+    rewritten = rewritten.strip().strip('"').strip()
+    return rewritten if 0 < len(rewritten) <= 500 else question
+
+
+async def update_summary(session: AsyncSession, section: ChatSection) -> None:
+    """Fold messages that have left the recent-history window into the section's rolling summary."""
+    settings = get_settings()
+    messages = list(
+        await session.scalars(
+            select(ChatMessage)
+            .where(ChatMessage.section_id == section.id, ChatMessage.status == "completed")
+            .order_by(ChatMessage.created_at)
+        )
+    )
+    cutoff = len(messages) - settings.history_window
+    if cutoff - section.summary_message_count < settings.summary_min_new_messages:
+        return
+    to_fold = messages[section.summary_message_count : cutoff]
+    prompt = (
+        "Update the running summary of a tutoring conversation. Keep the topics covered, key facts "
+        "the student learned, and anything they said they struggle with. Max 200 words.\n\n"
+        f"Current summary:\n{section.summary or '(none)'}\n\nNew messages:\n{_transcript(to_fold)}"
+    )
+    summary = await providers.llm().complete(
+        [{"role": "user", "content": prompt}], model=settings.groq_fast_model, temperature=0.0, max_tokens=2048
+    )
+    if summary.strip():
+        section.summary = summary.strip()
+        section.summary_message_count = cutoff
+        await session.commit()
