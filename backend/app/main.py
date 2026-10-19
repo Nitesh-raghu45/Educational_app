@@ -42,7 +42,40 @@ async def lifespan(app: FastAPI):
     await engine.dispose()
 
 
+class UnhandledErrorMiddleware:
+    """Turn crashes into a JSON 500 *inside* CORSMiddleware.
+
+    Starlette's default 500 response is produced outside the CORS layer, so browsers see only
+    a blocked request ("upload failed") instead of an error they can read.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        started = False
+
+        async def send_wrapper(message):
+            nonlocal started
+            if message["type"] == "http.response.start":
+                started = True
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_wrapper)
+        except Exception:
+            logger.exception("Unhandled error on %s %s", scope.get("method"), scope.get("path"))
+            if started:
+                raise
+            error = AppError(500, "INTERNAL_ERROR", "Something went wrong on the server. Please try again.")
+            await JSONResponse(status_code=500, content=error.to_body())(scope, receive, send)
+
+
 app = FastAPI(title="Study Assistant API", version="1.0.0", lifespan=lifespan)
+# Added first so it sits inside CORSMiddleware (Starlette wraps later middleware around earlier).
+app.add_middleware(UnhandledErrorMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_settings().cors_origins,

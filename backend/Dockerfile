@@ -21,7 +21,10 @@ RUN python -c "from fastembed import TextEmbedding; TextEmbedding('sentence-tran
 
 COPY app ./app
 
-RUN useradd --create-home appuser && mkdir -p /data/uploads && chown -R appuser /data /models
+# The app runs as a non-root user: give it the upload folder and its default ./data location.
+RUN useradd --create-home appuser && mkdir -p /data/uploads /app/data && chown -R appuser /data /models /app/data
+
+ENV STORAGE_DIR=/data/uploads
 USER appuser
 
 EXPOSE 8000
