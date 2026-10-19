@@ -8,6 +8,10 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=("../.env", ".env"), extra="ignore")
 
     database_url: str = "mysql+aiomysql://edu:edu@localhost:3306/edu?charset=utf8mb4"
+    # Managed MySQL/MariaDB in the cloud (e.g. Aiven) requires TLS; set DATABASE_SSL=true there.
+    database_ssl: bool = False
+    # PEM text of the provider's CA certificate (Aiven uses its own CA); empty = system CAs.
+    database_ssl_ca: str = ""
     redis_url: str = "redis://localhost:6379/0"
     # Cloud Redis over TLS (e.g. Upstash) can take 1-3 s to connect from far away.
     redis_connect_timeout: float = 10.0
@@ -41,6 +45,9 @@ class Settings(BaseSettings):
     embedding_dim: int = 384
     # Where the ONNX model is downloaded to (baked into the Docker image at /models).
     embedding_cache_dir: str = "./data/models"
+    # Chunks embedded per ONNX run. 8 keeps peak memory ~250 MB (32 needs ~450 MB), which
+    # matters on small hosts such as Render's free 512 MB instances.
+    embedding_batch_size: int = 8
 
     chunk_size: int = 1000
     chunk_overlap: int = 150

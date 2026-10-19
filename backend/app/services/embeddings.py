@@ -8,9 +8,10 @@ class MiniLMEmbedder:
     Docker image and memory use small.
     """
 
-    def __init__(self, model_name: str, cache_dir: str | None = None):
+    def __init__(self, model_name: str, cache_dir: str | None = None, batch_size: int = 8):
         self._model_name = model_name
         self._cache_dir = cache_dir
+        self._batch_size = batch_size
         self._model = None
         self._lock = threading.Lock()
 
@@ -23,7 +24,7 @@ class MiniLMEmbedder:
             return self._model
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        return [vector.tolist() for vector in self._get_model().embed(texts, batch_size=32)]
+        return [vector.tolist() for vector in self._get_model().embed(texts, batch_size=self._batch_size)]
 
     def embed_query(self, text: str) -> list[float]:
         return self.embed_documents([text])[0]

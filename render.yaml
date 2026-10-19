@@ -1,0 +1,54 @@
+# Render Blueprint: Dashboard → New → Blueprint → pick this repo.
+# Values marked `sync: false` are asked for once when the Blueprint is created.
+services:
+  # FastAPI backend (Docker). Documents are processed inline: Render's free plan has no
+  # background workers and its disk is wiped on restart, so nothing relies on stored files.
+  - type: web
+    name: edu-api
+    runtime: docker
+    plan: free
+    dockerContext: ./backend
+    dockerfilePath: ./backend/Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false
+      - key: PINECONE_API_KEY
+        sync: false
+      - key: REDIS_URL            # Upstash rediss:// URL (leave empty to disable rate limiting)
+        sync: false
+      - key: DATABASE_URL         # mysql+aiomysql://USER:PASSWORD@HOST:PORT/DB?charset=utf8mb4
+        sync: false
+      - key: DATABASE_SSL_CA      # Aiven: paste the CA certificate (ca.pem) contents
+        sync: false
+      - key: CORS_ORIGINS         # ["https://<your edu-web name>.onrender.com"]
+        sync: false
+      - key: DATABASE_SSL
+        value: "true"
+      - key: JWT_SECRET
+        generateValue: true
+      - key: INGEST_MODE
+        value: inline
+      - key: STORAGE_DIR
+        value: /data/uploads
+      - key: PINECONE_INDEX
+        value: education-app
+      - key: GROQ_ANSWER_MODEL
+        value: openai/gpt-oss-120b
+      - key: GROQ_FAST_MODEL
+        value: openai/gpt-oss-20b
+
+  # React frontend (static site). VITE_API_URL is baked in at build time.
+  - type: web
+    name: edu-web
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: VITE_API_URL         # https://<your edu-api name>.onrender.com
+        sync: false
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

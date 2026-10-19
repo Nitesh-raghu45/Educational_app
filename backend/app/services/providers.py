@@ -36,7 +36,7 @@ def embedder() -> Embedder:
         from .embeddings import MiniLMEmbedder
 
         settings = get_settings()
-        _embedder = MiniLMEmbedder(settings.embedding_model, settings.embedding_cache_dir)
+        _embedder = MiniLMEmbedder(settings.embedding_model, settings.embedding_cache_dir, settings.embedding_batch_size)
     return _embedder
 
 

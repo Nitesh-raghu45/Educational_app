@@ -131,3 +131,12 @@ Attempts are scored and stored.
 - Replace `create_all` on startup with Alembic migrations before running several API replicas.
 - Move uploads to S3/GCS/R2 with private buckets. `storage.py` is the only module that touches files.
 - Add malware scanning and MIME sniffing on uploads, OCR for scanned PDFs (pdf2image + Poppler), and refresh tokens or SSO.
+
+## Deploy to Render
+
+[`render.yaml`](render.yaml) defines two services: `edu-api` (Docker, free plan) and `edu-web` (static site).
+
+- **Database:** use a managed MySQL that doesn't expire (for example Aiven's free MySQL). Set `DATABASE_URL=mysql+aiomysql://…`, keep `DATABASE_SSL=true`, and paste the provider's CA certificate into `DATABASE_SSL_CA`. Render's free Postgres is deleted after 30 days, and this app's driver is MySQL/MariaDB.
+- **Documents are processed inline** (`INGEST_MODE=inline`). Render's free plan has no background workers, and its disk is wiped on restart.
+- **Memory:** `EMBEDDING_BATCH_SIZE=8` keeps peak memory around 315 MB, under the free plan's 512 MB.
+- **URLs:** set `VITE_API_URL` on `edu-web` to the API URL, and `CORS_ORIGINS` on `edu-api` to `["https://<edu-web>.onrender.com"]`.

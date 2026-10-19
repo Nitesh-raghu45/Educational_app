@@ -1,6 +1,7 @@
 import type { Attempt, DocumentInfo, Message, Quiz, Section, User } from "./types";
 
-const BASE = "/api/v1";
+// Empty in dev/docker (same origin, proxied). On Render, VITE_API_URL is the API service URL.
+const BASE = `${(import.meta.env.VITE_API_URL ?? "").replace(/\/+$/, "")}/api/v1`;
 const TOKEN_KEY = "study.token";
 
 export class ApiError extends Error {
